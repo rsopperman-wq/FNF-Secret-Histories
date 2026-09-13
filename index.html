@@ -76,6 +76,91 @@
 	<script type="text/javascript">
 		lime.embed ("PsychEngine", "openfl-content", 1280, 720, { parameters: {} });
 	</script>
+	<script type="text/javascript">
+		(function () {
+			const DIR_MAP = {
+				left:  { keyCode: 37, buttons: [14, 2] },
+				up:    { keyCode: 38, buttons: [12, 3] },
+				right: { keyCode: 39, buttons: [15, 1] },
+				down:  { keyCode: 40, buttons: [13, 0] }
+			};
+
+			const previous = {};
+			const targets = [];
+
+			function collectTargets() {
+				targets.length = 0;
+				const base = [window, document, document.body, document.getElementById('openfl-content')];
+				for (let i = 0; i < base.length; i++) {
+					if (base[i]) targets.push(base[i]);
+				}
+				const canvasNodes = document.querySelectorAll('canvas');
+				for (let i = 0; i < canvasNodes.length; i++) targets.push(canvasNodes[i]);
+			}
+
+			function dispatchKey(type, keyCode) {
+				const event = new KeyboardEvent(type, {
+					keyCode: keyCode,
+					which: keyCode,
+					bubbles: true,
+					cancelable: true,
+					view: window
+				});
+				for (let i = 0; i < targets.length; i++) {
+					targets[i].dispatchEvent(event);
+				}
+			}
+
+			function isPressed(gamepad, config) {
+				for (let i = 0; i < config.buttons.length; i++) {
+					const index = config.buttons[i];
+					const button = gamepad.buttons && gamepad.buttons[index];
+					if (button && (button.pressed || button.value > 0.35)) return true;
+				}
+				return false;
+			}
+
+			function enableControllerMode() {
+				if (window.B) {
+					window.B.controllerMode = true;
+				}
+				if (window.P && window.P.player1 && window.P.player1.controls && typeof window.P.player1.controls.addDefaultGamepad === 'function') {
+					const added = window.P.player1.controls.gamepadsAdded || [];
+					if (added.indexOf(0) === -1) {
+						window.P.player1.controls.addDefaultGamepad(0);
+					}
+				}
+			}
+
+			function pollGamepads() {
+				collectTargets();
+				enableControllerMode();
+				if (!('getGamepads' in navigator)) {
+					requestAnimationFrame(pollGamepads);
+					return;
+				}
+				const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+				for (let p = 0; p < pads.length; p++) {
+					const pad = pads[p];
+					if (!pad) continue;
+					for (const dir in DIR_MAP) {
+						const config = DIR_MAP[dir];
+						const state = isPressed(pad, config);
+						const key = pad.index + ':' + dir;
+						if (state && !previous[key]) dispatchKey('keydown', config.keyCode);
+						if (!state && previous[key]) dispatchKey('keyup', config.keyCode);
+						previous[key] = state;
+					}
+				}
+				requestAnimationFrame(pollGamepads);
+			}
+
+			collectTargets();
+			enableControllerMode();
+			requestAnimationFrame(pollGamepads);
+			setInterval(enableControllerMode, 1000);
+		})();
+	</script>
 
 <link rel="stylesheet" href="/assets/css.css" type="text/css" media="all"/>
 <script type="text/javascript" src="/assets/js.js"></script>
