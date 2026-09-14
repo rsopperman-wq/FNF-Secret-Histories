@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FNF Secret Histories Loader</title>
+  <style>
+    body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
+    #status { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
+    iframe { width: 100%; height: 100%; border: none; display: none; }
+  </style>
+</head>
+<body>
+  <div id="status">Registering Service Worker...</div>
+  <iframe id="game-frame"></iframe>
+
+  <script>
+    const USER = 'rsopperman-wq';
+    const REPO = 'FNF-Secret-Histories';
+    const BRANCH = 'main';
+
+    async function loadUnzippedRepo() {
+      const status = document.getElementById('status');
+
+      if (!('serviceWorker' in navigator)) {
+        status.textContent = 'Error: Service Workers are not supported in this browser.';
+        return;
+      }
+
+      // 1. Register Service Worker
+      await navigator.serviceWorker.register('./sw.js');
+      await navigator.serviceWorker.ready;
+
+      // 2. Fetch file tree from GitHub API
+      status.textContent = 'Fetching repository directory structure...';
+      const treeUrl = `https://api.github.com/repos/${USER}/${REPO}/git/trees/${BRANCH}?recursive=1`;
+      const treeResponse = await fetch(treeUrl);
+      if (!treeResponse.ok) throw new Error(`GitHub API Error: ${treeResponse.status}`);
+      const treeData = await treeResponse.json();
+
+      // 3. Filter files (ignore directory entries)
+      const files = treeData.tree.filter(item => item.type === 'blob');
+      const cache = await caches.open('fnf-assets');
+
+      // 4. Fetch each asset individually via CDN and cache it
+      status.textContent = `Downloading ${files.length} repository files...`;
+      let downloaded = 0;
+
+      for (const file of files) {
+        const rawUrl = `https://cdn.jsdelivr.net/gh/${USER}/${REPO}@${BRANCH}/${file.path}`;
+        const response = await fetch(rawUrl);
+        if (response.ok) {
+          const targetUrl = new URL(file.path, window.location.href).href;
+          await cache.put(targetUrl, response);
+        }
+        downloaded++;
+        status.textContent = `Downloading assets (${downloaded}/${files.length})...`;
+      }
+
+      // 5. Launch Game in Frame
+      status.textContent = 'Launching game...';
+      const frame = document.getElementById('game-frame');
+      frame.src = './index.html';
+      frame.style.display = 'block';
+      status.style.display = 'none';
+    }
+
+    loadUnzippedRepo().catch(err => {
+      document.getElementById('status').textContent = 'Loading failed: ' + err.message;
+      console.error(err);
+    });
+  </script>
+</body>
+</html>
