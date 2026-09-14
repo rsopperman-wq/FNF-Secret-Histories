@@ -1,74 +1,295 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>FNF Secret Histories Loader</title>
-  <style>
-    body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
-    #status { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
-    iframe { width: 100%; height: 100%; border: none; display: none; }
-  </style>
-</head>
-<body>
-  <div id="status">Registering Service Worker...</div>
-  <iframe id="game-frame"></iframe>
 
-  <script>
-    const USER = 'rsopperman-wq';
+<head>
+	<meta charset="UTF-8">
+	<title>FNF Secret Histories</title>
+	<style>
+		html,
+		body {
+			margin: 0;
+			padding: 0;
+			width: 100%;
+			height: 100%;
+			overflow: hidden;
+			background-color: #000;
+			color: #fff;
+			font-family: system-ui, -apple-system, sans-serif;
+		}
+
+		#ui-bar {
+			position: fixed;
+			top: 10px;
+			right: 10px;
+			z-index: 99999;
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			background: rgba(15, 15, 15, 0.85);
+			padding: 6px 12px;
+			border-radius: 8px;
+			border: 1px solid #333;
+			backdrop-filter: blur(4px);
+		}
+
+		#status-text {
+			font-size: 0.8rem;
+			color: #aaa;
+		}
+
+		button {
+			background: #ff0055;
+			color: #fff;
+			border: none;
+			padding: 6px 12px;
+			border-radius: 4px;
+			font-weight: bold;
+			cursor: pointer;
+			font-size: 0.8rem;
+		}
+
+		button:hover {
+			background: #d00045;
+		}
+
+		#loading-overlay {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			text-align: center;
+			font-size: 1.2rem;
+		}
+
+		iframe {
+			width: 100%;
+			height: 100%;
+			border: none;
+			display: none;
+		}
+	</style>
+</head>
+
+<body>
+
+	<div id="ui-bar">
+		<span id="status-text">Ready</span>
+		<button id="reload-btn" onclick="reloadGameFrame()">Reload Game</button>
+	</div>
+
+	<div id="loading-overlay">Starting game engine...</div>
+	<iframe id="game-frame" allow="autoplay; gamepad; fullscreen; focus-without-user-activation"></iframe>
+
+	<script>
+		const USER = 'rsopperman-wq';
     const REPO = 'FNF-Secret-Histories';
     const BRANCH = 'main';
-    const ENTRY_POINT = 'index1.html';
+    const ENTRY_FILE = 'index1.html';
+    const CACHE_NAME = 'fnf-auto-cache-v1';
+    const baseUrl = `https://cdn.jsdelivr.net/gh/${USER}/${REPO}@${BRANCH}/`;
 
-    async function loadUnzippedRepo() {
-      const status = document.getElementById('status');
+    async function launchGame() {
+      const overlay = document.getElementById('loading-overlay');
+      const frame = document.getElementById('game-frame');
+      const cache = await caches.open(CACHE_NAME);
 
-      if (!('serviceWorker' in navigator)) {
-        status.textContent = 'Error: Service Workers are not supported in this browser.';
+      const entryUrl = `${baseUrl}${ENTRY_FILE}`;
+      
+      let response = await cache.match(entryUrl);
+      if (!response && navigator.onLine) {
+        response = await fetch(entryUrl);
+        if (response.ok) {
+          await cache.put(entryUrl, response.clone());
+        }
+      }
+
+      if (!response) {
+        overlay.textContent = 'Error: Device is offline and game entry file was not previously cached.';
         return;
       }
 
-      // 1. Register Service Worker
-      await navigator.serviceWorker.register('./sw.js');
-      await navigator.serviceWorker.ready;
+      const htmlText = await response.text();
 
-      // 2. Fetch file tree from GitHub API
-      status.textContent = 'Fetching repository directory structure...';
-      const treeUrl = `https://api.github.com/repos/${USER}/${REPO}/git/trees/${BRANCH}?recursive=1`;
-      const treeResponse = await fetch(treeUrl);
-      if (!treeResponse.ok) throw new Error(`GitHub API Error: ${treeResponse.status}`);
-      const treeData = await treeResponse.json();
+      const injectedPatch = `
+        <base href="${baseUrl}">
+        <script>
+          const CDN_BASE = '${baseUrl}';
+          const CACHE_NAME = '${CACHE_NAME}';
 
-      // 3. Filter files (ignore directory entries)
-      const files = treeData.tree.filter(item => item.type === 'blob');
-      const cache = await caches.open('fnf-assets');
+          // Patch URL constructor for iframe about:srcdoc support
+          (function() {
+            const NativeURL = window.URL;
+            function PatchedURL(url, base) {
+              if (!base || base === 'about:srcdoc' || base === 'about:blank' || base.startsWith('about:')) {
+                base = CDN_BASE;
+              }
+              try {
+                return new NativeURL(url, base);
+              } catch (e) {
+                return new NativeURL(url, CDN_BASE);
+              }
+            }
+            PatchedURL.prototype = NativeURL.prototype;
+            Object.assign(PatchedURL, NativeURL);
+            window.URL = PatchedURL;
+          })();
 
-      // 4. Fetch each asset individually via CDN and cache it
-      status.textContent = `Downloading ${files.length} repository files...`;
-      let downloaded = 0;
+          // Mock Service Worker to prevent engine registration crashes
+          if ('serviceWorker' in navigator) {
+            const fakeReg = {
+              active: { postMessage: function() {} },
+              installing: null, waiting: null,
+              unregister: function() { return Promise.resolve(true); },
+              update: function() { return Promise.resolve(); },
+              addEventListener: function() {}
+            };
+            navigator.serviceWorker.register = function() { return Promise.resolve(fakeReg); };
+            try {
+              Object.defineProperty(navigator.serviceWorker, 'ready', {
+                get: function() { return Promise.resolve(fakeReg); },
+                configurable: true
+              });
+            } catch (e) {}
+          }
 
-      for (const file of files) {
-        const rawUrl = `https://cdn.jsdelivr.net/gh/${USER}/${REPO}@${BRANCH}/${file.path}`;
-        const response = await fetch(rawUrl);
-        if (response.ok) {
-          const targetUrl = new URL(file.path, window.location.href).href;
-          await cache.put(targetUrl, response);
-        }
-        downloaded++;
-        status.textContent = `Downloading assets (${downloaded}/${files.length})...`;
+          // Dynamic Fetch Interceptor (Saves requests to cache as they load)
+          (function() {
+            const origFetch = window.fetch;
+            window.fetch = async function(input, init) {
+              let urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+              let fullUrl = urlStr;
+              try { fullUrl = new URL(urlStr, CDN_BASE).href; } catch(e) {}
+
+              const cache = await caches.open(CACHE_NAME);
+              const cachedResp = await cache.match(fullUrl);
+              if (cachedResp) return cachedResp.clone();
+
+              try {
+                const response = await origFetch.apply(this, arguments);
+                if (response && response.status === 200) {
+                  cache.put(fullUrl, response.clone());
+                }
+                return response;
+              } catch (err) {
+                if (cachedResp) return cachedResp;
+                throw err;
+              }
+            };
+          })();
+
+          // Dynamic XHR Interceptor (Caches audio, images, and JSON data for OpenFL/Lime)
+          (function() {
+            const OrigXHR = window.XMLHttpRequest;
+            function PatchedXHR() {
+              const xhr = new OrigXHR();
+              const origOpen = xhr.open;
+              const origSend = xhr.send;
+              let reqUrl = '';
+
+              xhr.open = function(method, url) {
+                reqUrl = url;
+                return origOpen.apply(this, arguments);
+              };
+
+              xhr.send = function(body) {
+                let fullUrl = reqUrl;
+                try { fullUrl = new URL(reqUrl, CDN_BASE).href; } catch(e) {}
+
+                caches.open(CACHE_NAME).then(async (cache) => {
+                  const cached = await cache.match(fullUrl);
+                  
+                  if (cached) {
+                    const blob = await cached.blob();
+                    const buffer = await blob.arrayBuffer();
+
+                    Object.defineProperty(xhr, 'status', { value: 200, writable: true });
+                    Object.defineProperty(xhr, 'readyState', { value: 4, writable: true });
+
+                    if (xhr.responseType === 'arraybuffer') {
+                      Object.defineProperty(xhr, 'response', { value: buffer, writable: true });
+                    } else if (xhr.responseType === 'blob') {
+                      Object.defineProperty(xhr, 'response', { value: blob, writable: true });
+                    } else if (xhr.responseType === 'json') {
+                      const text = new TextDecoder().decode(buffer);
+                      Object.defineProperty(xhr, 'response', { value: JSON.parse(text), writable: true });
+                    } else {
+                      const text = new TextDecoder().decode(buffer);
+                      Object.defineProperty(xhr, 'response', { value: text, writable: true });
+                      Object.defineProperty(xhr, 'responseText', { value: text, writable: true });
+                    }
+
+                    setTimeout(() => {
+                      if (typeof xhr.onreadystatechange === 'function') xhr.onreadystatechange();
+                      if (typeof xhr.onload === 'function') xhr.onload();
+                      if (typeof xhr.onloadend === 'function') xhr.onloadend();
+                    }, 0);
+                    return;
+                  }
+
+                  xhr.addEventListener('load', function() {
+                    if (xhr.status === 200 && xhr.response) {
+                      let resBlob;
+                      if (xhr.response instanceof Blob) {
+                        resBlob = xhr.response;
+                      } else if (xhr.response instanceof ArrayBuffer) {
+                        resBlob = new Blob([xhr.response]);
+                      } else if (typeof xhr.response === 'string') {
+                        resBlob = new Blob([xhr.response]);
+                      }
+                      if (resBlob) {
+                        cache.put(fullUrl, new Response(resBlob, { status: 200 }));
+                      }
+                    }
+                  });
+
+                  origSend.apply(xhr, arguments);
+                }).catch(() => {
+                  origSend.apply(xhr, arguments);
+                });
+              };
+
+              return xhr;
+            }
+            PatchedXHR.prototype = OrigXHR.prototype;
+            Object.assign(PatchedXHR, OrigXHR);
+            window.XMLHttpRequest = PatchedXHR;
+          })();
+        <\/script>
+      `;
+
+      let processedHtml = htmlText;
+      if (processedHtml.includes('<head>')) {
+        processedHtml = processedHtml.replace('<head>', `<head>${injectedPatch}`);
+      } else {
+        processedHtml = injectedPatch + processedHtml;
       }
 
-      // 5. Launch Game in Frame targeting index1.html
-      status.textContent = 'Launching game...';
-      const frame = document.getElementById('game-frame');
-      frame.src = `./${ENTRY_POINT}`;
+      frame.srcdoc = processedHtml;
       frame.style.display = 'block';
-      status.style.display = 'none';
+      overlay.style.display = 'none';
+      document.getElementById('status-text').textContent = navigator.onLine ? 'Online' : 'Offline Mode';
     }
 
-    loadUnzippedRepo().catch(err => {
-      document.getElementById('status').textContent = 'Loading failed: ' + err.message;
+    function reloadGameFrame() {
+      const frame = document.getElementById('game-frame');
+      const overlay = document.getElementById('loading-overlay');
+
+      frame.style.display = 'none';
+      overlay.style.display = 'block';
+      overlay.textContent = 'Reloading game...';
+
+      setTimeout(() => {
+        launchGame().catch(err => {
+          overlay.textContent = 'Error reloading game: ' + err.message;
+        });
+      }, 150);
+    }
+
+    launchGame().catch(err => {
+      document.getElementById('loading-overlay').textContent = 'Error: ' + err.message;
       console.error(err);
     });
-  </script>
+	</script>
 </body>
+
 </html>
