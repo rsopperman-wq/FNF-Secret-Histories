@@ -17,6 +17,7 @@
     const USER = 'rsopperman-wq';
     const REPO = 'FNF-Secret-Histories';
     const BRANCH = 'main';
+    const ENTRY_POINT = 'index1.html';
 
     async function loadUnzippedRepo() {
       const status = document.getElementById('status');
@@ -56,10 +57,10 @@
         status.textContent = `Downloading assets (${downloaded}/${files.length})...`;
       }
 
-      // 5. Launch Game in Frame
+      // 5. Launch Game in Frame targeting index1.html
       status.textContent = 'Launching game...';
       const frame = document.getElementById('game-frame');
-      frame.src = './index.html';
+      frame.src = `./${ENTRY_POINT}`;
       frame.style.display = 'block';
       status.style.display = 'none';
     }
